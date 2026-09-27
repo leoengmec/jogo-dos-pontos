@@ -1,0 +1,423 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
+<title>Jogo dos Pontos</title>
+<style>
+  :root {
+    --paper: #f1f0ec;
+    --ink: #1b1b1b;
+    --muted: #6b6b6b;
+    --accent: #2f6fd6;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0; height: 100%;
+    background: var(--paper);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3'/%3E%3CfeColorMatrix values='0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0 0.5 0 0 0 0.12 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+    color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    overflow: hidden;
+    touch-action: none;
+    user-select: none; -webkit-user-select: none;
+  }
+  #app { display: flex; flex-direction: column; height: 100%; max-width: 640px; margin: 0 auto; padding: 12px 16px; }
+  header { flex: none; }
+  .top { display: flex; justify-content: space-between; align-items: center; }
+  .level { font-weight: 700; font-size: 18px; }
+  .btns { display: flex; gap: 8px; }
+  button {
+    font: inherit; font-weight: 600; font-size: 15px;
+    border: 2px solid var(--ink); border-radius: 12px;
+    background: #fff; color: var(--ink); padding: 6px 12px; cursor: pointer;
+  }
+  button:disabled { opacity: .35; cursor: default; }
+  /* Régua de QI */
+  .iq { position: relative; height: 78px; margin: 10px 8px 0; }
+  .iq .line { position: absolute; left: 0; right: 0; top: 36px; height: 3px; background: var(--ink); }
+  .iq .tick { position: absolute; top: 18px; width: 3px; height: 21px; background: var(--ink); transform: translateX(-1px); }
+  .iq .tick.done { background: var(--accent); }
+  .iq .lbl { position: absolute; top: 44px; transform: translateX(-50%); font-weight: 800; font-size: 20px; }
+  .iq .lbl.cur { color: var(--accent); }
+  .iq .me { position: absolute; top: -4px; font-size: 26px; transform: translateX(-50%); transition: left .5s; }
+  .iq .goal { position: absolute; right: -8px; top: -6px; font-size: 26px; }
+  .hint { text-align: center; color: var(--muted); font-size: 14px; min-height: 20px; margin-top: 2px; }
+  #stage { flex: 1; position: relative; display: flex; align-items: center; justify-content: center; min-height: 0; }
+  canvas { display: block; }
+  canvas.shake { animation: shake .3s; }
+  @keyframes shake { 25% { transform: translateX(-8px); } 50% { transform: translateX(8px); } 75% { transform: translateX(-4px); } }
+  #win {
+    position: absolute; inset: 0; display: none; align-items: flex-end; justify-content: center;
+    padding-bottom: 8px; pointer-events: none;
+  }
+  #win.show { display: flex; }
+  .card { pointer-events: auto; background: #fff; border: 3px solid var(--ink); border-radius: 20px; padding: 24px 28px; text-align: center; }
+  .card h2 { margin: 0 0 6px; font-size: 28px; }
+  .card p { margin: 0 0 16px; font-size: 18px; }
+</style>
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="top">
+      <div class="level" id="levelName">Fase 1</div>
+      <div class="btns">
+        <button id="prev" aria-label="Fase anterior">◀</button>
+        <button id="reset">Reiniciar</button>
+        <button id="next" aria-label="Próxima fase">▶</button>
+      </div>
+    </div>
+    <div class="iq" id="iq"></div>
+    <div class="hint" id="hint">Ligue as bolinhas da mesma cor. As linhas não podem se cruzar.</div>
+  </header>
+  <div id="stage">
+    <canvas id="c"></canvas>
+    <div id="win"><div class="card">
+      <h2 id="winTitle">Resolvido!</h2>
+      <p id="winText"></p>
+      <button id="winBtn">Próxima fase</button>
+    </div></div>
+  </div>
+</div>
+
+<script>
+'use strict';
+
+// ---------- Configuração ----------
+const W = 1000;              // espaço lógico: 1000 x 1000
+const DOT_R = 38;            // raio das bolinhas
+const LW = 22;               // espessura da linha
+const STEP = 7;              // distância entre pontos amostrados do traço
+const COLORS = {
+  red: '#e0261f', blue: '#1f4fd6', green: '#2e9a2a',
+  yellow: '#f2c21b', purple: '#8a3cc4', orange: '#f07a12',
+};
+
+// Pontos na borda do círculo: ângulo em graus (0 = direita, 90 = baixo).
+const C = { x: 500, y: 500, r: 400 };
+const onCircle = deg => {
+  const a = deg * Math.PI / 180;
+  return [C.x + C.r * Math.cos(a), C.y + C.r * Math.sin(a)];
+};
+
+// Cada fase: borda (círculo ou retângulo), obstáculos e pares de bolinhas.
+const LEVELS = [
+  { iq: 85, hint: 'Arraste de uma bolinha até a outra da mesma cor.',
+    shape: 'circle',
+    pairs: {
+      red:  [[330, 380], [670, 380]],
+      blue: [[330, 620], [670, 620]],
+    } },
+  { iq: 100, hint: 'As bolinhas na borda também valem.',
+    shape: 'circle',
+    pairs: {
+      green: [onCircle(180), onCircle(0)],
+      blue:  [onCircle(-90), [500, 330]],
+      red:   [onCircle(90), [500, 680]],
+    } },
+  { iq: 110, hint: 'Nem sempre o caminho reto é o certo…',
+    shape: 'circle',
+    pairs: {
+      green: [onCircle(180), onCircle(0)],
+      blue:  [onCircle(-90), [396, 600]],
+      red:   [onCircle(90), [588, 456]],
+    } },
+  { iq: 125, hint: 'Talvez a ordem importe.',
+    shape: 'circle',
+    pairs: {
+      red:   [onCircle(-90), onCircle(90)],
+      blue:  [onCircle(0), [300, 500]],
+      green: [onCircle(180), [700, 500]],
+    } },
+  { iq: 140, hint: 'Há um buraco no meio.',
+    shape: 'circle',
+    holes: [{ x: 500, y: 500, r: 120 }],
+    pairs: {
+      red:   [onCircle(-90), onCircle(90)],
+      blue:  [[250, 500], [750, 500]],
+      green: [[500, 250], [500, 750]],
+    } },
+  { iq: 161, hint: 'Nível Newton.',
+    shape: 'circle',
+    pairs: {
+      green:  [onCircle(180), onCircle(0)],
+      blue:   [onCircle(-120), [250, 620]],
+      yellow: [onCircle(-60), [750, 620]],
+      red:    [onCircle(90), [500, 380]],
+    } },
+];
+
+// ---------- Estado ----------
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+let scale = 1, dpr = 1;
+let levelIdx = 0;
+let level, dots, paths, active, solved;
+let maxUnlocked = 0;
+
+try { maxUnlocked = Math.min(LEVELS.length - 1, parseInt(localStorage.getItem('pontos.unlocked') || '0', 10) || 0); } catch (e) {}
+levelIdx = maxUnlocked;
+
+function saveProgress() {
+  try { localStorage.setItem('pontos.unlocked', String(maxUnlocked)); } catch (e) {}
+}
+
+function loadLevel(i) {
+  levelIdx = i;
+  level = LEVELS[i];
+  dots = [];
+  for (const [color, pts] of Object.entries(level.pairs)) {
+    pts.forEach(([x, y]) => dots.push({ x, y, color }));
+  }
+  paths = {};       // cor -> lista de pontos (ligações concluídas)
+  active = null;    // { color, from, pts }
+  solved = false;
+  document.getElementById('levelName').textContent = `Fase ${i + 1} de ${LEVELS.length}`;
+  document.getElementById('hint').textContent = level.hint;
+  document.getElementById('win').classList.remove('show');
+  updateButtons();
+  renderIQ();
+  draw();
+}
+
+function updateButtons() {
+  document.getElementById('prev').disabled = levelIdx === 0;
+  document.getElementById('next').disabled = levelIdx >= maxUnlocked || levelIdx === LEVELS.length - 1;
+}
+
+// ---------- Régua de QI ----------
+function renderIQ() {
+  const el = document.getElementById('iq');
+  const min = LEVELS[0].iq, max = LEVELS[LEVELS.length - 1].iq;
+  const pos = iq => ((iq - min) / (max - min)) * 100;
+  let html = '<div class="line"></div><div class="goal">🧑‍🔬</div>';
+  LEVELS.forEach((lv, i) => {
+    const show = i === 0 || i === levelIdx || i === LEVELS.length - 1;
+    html += `<div class="tick ${i <= maxUnlocked ? 'done' : ''}" style="left:${pos(lv.iq)}%"></div>`;
+    if (show) html += `<div class="lbl ${i === levelIdx ? 'cur' : ''}" style="left:${pos(lv.iq)}%">${lv.iq}</div>`;
+  });
+  html += `<div class="me" style="left:${pos(LEVELS[levelIdx].iq)}%">🧠</div>`;
+  el.innerHTML = html;
+}
+
+// ---------- Geometria ----------
+const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
+
+function distPointSeg(p, a, b) {
+  const dx = b.x - a.x, dy = b.y - a.y;
+  const len2 = dx * dx + dy * dy;
+  let t = len2 ? ((p.x - a.x) * dx + (p.y - a.y) * dy) / len2 : 0;
+  t = Math.max(0, Math.min(1, t));
+  return Math.hypot(p.x - (a.x + t * dx), p.y - (a.y + t * dy));
+}
+
+function insideArea(p) {
+  const m = LW / 2;
+  if (level.shape === 'circle') {
+    if (Math.hypot(p.x - C.x, p.y - C.y) > C.r - m) return false;
+  } else {
+    const r = level.rect;
+    if (p.x < r.x + m || p.x > r.x + r.w - m || p.y < r.y + m || p.y > r.y + r.h - m) return false;
+  }
+  for (const h of level.holes || []) {
+    if (Math.hypot(p.x - h.x, p.y - h.y) < h.r + m) return false;
+  }
+  return true;
+}
+
+// Retorna null se o ponto é válido, ou o motivo da falha.
+function checkPoint(p) {
+  const own = dots.filter(d => d.color === active.color);
+  const nearOwn = own.some(d => dist(p, d) < DOT_R + LW);
+  if (!nearOwn && !insideArea(p)) return 'wall';
+
+  for (const d of dots) {
+    if (d.color !== active.color && dist(p, d) < DOT_R + LW / 2) return 'dot';
+  }
+  for (const [color, pts] of Object.entries(paths)) {
+    if (color === active.color) continue;
+    for (let i = 1; i < pts.length; i++) {
+      if (distPointSeg(p, pts[i - 1], pts[i]) < LW) return 'line';
+    }
+  }
+  // A linha não pode cruzar a si mesma (ignora o trecho recente).
+  const skip = Math.ceil((LW * 2) / STEP) + 1;
+  const own_pts = active.pts;
+  for (let i = 1; i < own_pts.length - skip; i++) {
+    if (distPointSeg(p, own_pts[i - 1], own_pts[i]) < LW * 0.9) return 'line';
+  }
+  return null;
+}
+
+// ---------- Entrada ----------
+function toLogical(e) {
+  const r = canvas.getBoundingClientRect();
+  return { x: (e.clientX - r.left) / scale, y: (e.clientY - r.top) / scale };
+}
+
+function dotAt(p) {
+  let best = null, bd = DOT_R * 1.4;
+  for (const d of dots) {
+    const k = dist(p, d);
+    if (k < bd) { bd = k; best = d; }
+  }
+  return best;
+}
+
+canvas.addEventListener('pointerdown', e => {
+  if (solved) return;
+  const p = toLogical(e);
+  const d = dotAt(p);
+  if (!d) {
+    // Tocar numa linha existente apaga ela.
+    for (const [color, pts] of Object.entries(paths)) {
+      for (let i = 1; i < pts.length; i++) {
+        if (distPointSeg(p, pts[i - 1], pts[i]) < LW) { delete paths[color]; draw(); return; }
+      }
+    }
+    return;
+  }
+  delete paths[d.color];
+  active = { color: d.color, from: d, pts: [{ x: d.x, y: d.y }] };
+  canvas.setPointerCapture(e.pointerId);
+  draw();
+});
+
+canvas.addEventListener('pointermove', e => {
+  if (!active) return;
+  const p = toLogical(e);
+  const last = active.pts[active.pts.length - 1];
+  const d = dist(p, last);
+  if (d < STEP) return;
+  const n = Math.ceil(d / STEP);
+  const target = dots.find(t => t.color === active.color && t !== active.from);
+  for (let i = 1; i <= n; i++) {
+    const q = { x: last.x + (p.x - last.x) * i / n, y: last.y + (p.y - last.y) * i / n };
+    if (dist(q, target) < DOT_R) {
+      active.pts.push({ x: target.x, y: target.y });
+      paths[active.color] = active.pts;
+      active = null;
+      vibrate(15);
+      draw();
+      checkWin();
+      return;
+    }
+    if (checkPoint(q)) { fail(); return; }
+    active.pts.push(q);
+  }
+  draw();
+});
+
+const endStroke = () => { if (active) { active = null; draw(); } };
+canvas.addEventListener('pointerup', endStroke);
+canvas.addEventListener('pointercancel', endStroke);
+
+function fail() {
+  active = null;
+  draw();
+  vibrate([30, 40, 30]);
+  canvas.classList.remove('shake');
+  void canvas.offsetWidth;
+  canvas.classList.add('shake');
+}
+
+function vibrate(p) { try { navigator.vibrate && navigator.vibrate(p); } catch (e) {} }
+
+function checkWin() {
+  if (Object.keys(paths).length < Object.keys(level.pairs).length) return;
+  solved = true;
+  if (levelIdx === maxUnlocked && maxUnlocked < LEVELS.length - 1) maxUnlocked++;
+  saveProgress();
+  updateButtons();
+  renderIQ();
+  const last = levelIdx === LEVELS.length - 1;
+  document.getElementById('winTitle').textContent = last ? 'Gênio! 🧑‍🔬' : 'Resolvido! 🧠';
+  document.getElementById('winText').textContent = last
+    ? `QI ${level.iq}: você venceu todas as fases.`
+    : `QI ${level.iq}. Próximo: ${LEVELS[levelIdx + 1].iq}.`;
+  document.getElementById('winBtn').textContent = last ? 'Jogar de novo' : 'Próxima fase';
+  setTimeout(() => document.getElementById('win').classList.add('show'), 350);
+}
+
+// ---------- Desenho ----------
+function resize() {
+  const stage = document.getElementById('stage');
+  const size = Math.max(200, Math.min(stage.clientWidth, stage.clientHeight));
+  dpr = window.devicePixelRatio || 1;
+  scale = size / W;
+  canvas.style.width = canvas.style.height = size + 'px';
+  canvas.width = canvas.height = Math.round(size * dpr);
+  draw();
+}
+
+function strokePath(pts, color) {
+  if (pts.length < 2) return;
+  ctx.lineCap = ctx.lineJoin = 'round';
+  ctx.beginPath();
+  ctx.moveTo(pts[0].x, pts[0].y);
+  for (let i = 1; i < pts.length; i++) ctx.lineTo(pts[i].x, pts[i].y);
+  ctx.strokeStyle = '#1b1b1b';
+  ctx.lineWidth = LW + 8;
+  ctx.stroke();
+  ctx.strokeStyle = color;
+  ctx.lineWidth = LW;
+  ctx.stroke();
+}
+
+function draw() {
+  if (!level) return;
+  ctx.setTransform(dpr * scale, 0, 0, dpr * scale, 0, 0);
+  ctx.clearRect(0, 0, W, W);
+
+  // Borda
+  ctx.strokeStyle = '#1b1b1b';
+  ctx.lineWidth = 14;
+  ctx.beginPath();
+  if (level.shape === 'circle') ctx.arc(C.x, C.y, C.r, 0, Math.PI * 2);
+  else { const r = level.rect; ctx.roundRect ? ctx.roundRect(r.x, r.y, r.w, r.h, 18) : ctx.rect(r.x, r.y, r.w, r.h); }
+  ctx.stroke();
+
+  // Obstáculos
+  for (const h of level.holes || []) {
+    ctx.beginPath();
+    ctx.arc(h.x, h.y, h.r, 0, Math.PI * 2);
+    ctx.fillStyle = '#3a3a3a';
+    ctx.fill();
+    ctx.stroke();
+  }
+
+  for (const [color, pts] of Object.entries(paths)) strokePath(pts, COLORS[color]);
+  if (active) strokePath(active.pts, COLORS[active.color]);
+
+  // Bolinhas
+  for (const d of dots) {
+    ctx.beginPath();
+    ctx.arc(d.x, d.y, DOT_R, 0, Math.PI * 2);
+    ctx.fillStyle = COLORS[d.color];
+    ctx.fill();
+    ctx.lineWidth = 9;
+    ctx.strokeStyle = '#1b1b1b';
+    ctx.stroke();
+    if (paths[d.color]) {
+      ctx.beginPath();
+      ctx.arc(d.x - 10, d.y - 10, 9, 0, Math.PI * 2);
+      ctx.fillStyle = 'rgba(255,255,255,.55)';
+      ctx.fill();
+    }
+  }
+}
+
+// ---------- Botões ----------
+document.getElementById('reset').onclick = () => loadLevel(levelIdx);
+document.getElementById('prev').onclick = () => levelIdx > 0 && loadLevel(levelIdx - 1);
+document.getElementById('next').onclick = () => levelIdx < maxUnlocked && loadLevel(levelIdx + 1);
+document.getElementById('winBtn').onclick = () =>
+  loadLevel(levelIdx === LEVELS.length - 1 ? 0 : levelIdx + 1);
+
+window.addEventListener('resize', resize);
+loadLevel(levelIdx);
+resize();
+</script>
+</body>
+</html>
