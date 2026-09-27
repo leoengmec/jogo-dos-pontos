@@ -1,11 +1,11 @@
 # Jogo dos Pontos
 
-Puzzle: ligue as bolinhas da mesma cor sem cruzar linhas, sem encostar em outras bolinhas e sem sair da borda. 6 fases, régua de QI de 85 a 161.
+Puzzle: ligue as bolinhas da mesma cor sem cruzar linhas, sem encostar em outras bolinhas e sem sair da borda. 12 fases com muros e buracos, régua de QI de 85 a 161, estrelas por fase, som e seleção de fases.
 
 Jogar: abra `index.html` no navegador (celular ou PC). Sem dependências.
 
 - Arraste de uma bolinha até o par dela.
-- Toque numa linha para apagá-la.
+- Toque numa linha para apagá-la. Desfazer remove a última.
 - Progresso salvo no navegador.
 
 ## Instalar no iPhone como app

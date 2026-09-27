@@ -1,5 +1,5 @@
 // Cache para jogar offline. Troque a versão ao alterar arquivos.
-const CACHE = 'pontos-v1';
+const CACHE = 'pontos-v2';
 const FILES = ['./', 'index.html', 'manifest.webmanifest', 'icons/icon-180.png', 'icons/icon-192.png', 'icons/icon-512.png'];
 
 self.addEventListener('install', e => {
